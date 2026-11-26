@@ -5,7 +5,7 @@
  * ดังนั้นเปิดได้ทุกเครื่อง แม้ล็อกอิน Google หลายบัญชี
  *
  * ติดตั้ง: ดู apps-script/ติดตั้ง.md
- * ไฟล์ Seed.gs (รายชื่อนักเรียน) ไม่อยู่ใน GitHub เพราะเป็นข้อมูลส่วนบุคคล — ได้รับแยกต่างหาก
+ * รายการแข่งขันอ่านจากชีตรายการของโรงเรียน (ใส่ ID ที่ SOURCE_SHEET_ID) ไม่เก็บรายชื่อนักเรียนไว้ในโค้ด
  */
 
 const CFG = {
@@ -47,7 +47,8 @@ function setup() {
   if (!sh) {
     sh = ss.insertSheet(CFG.SHEET_ITEMS);
     sh.getRange(1, 1, 1, ITEM_COLS.length).setValues([ITEM_COLS]);
-    const rows = SEED_ITEMS.map(r => ['K' + String(r[0]).padStart(3, '0'), r[0], r[1], r[2], r[3], r[4], r[5], r[6], '', '', '', '', '']);
+    sh.getRange('E:E').setNumberFormat('@');
+    const rows = seedItems_().map(r => ['K' + String(r[0]).padStart(3, '0'), r[0], r[1], r[2], r[3], r[4], r[5], r[6], '', '', '', '', '']);
     sh.getRange(2, 1, rows.length, ITEM_COLS.length).setValues(rows);
     sh.getRange(2, 7, rows.length, 2).setWrap(true);
   }
@@ -133,7 +134,7 @@ function publicData_() {
   });
   const pending = readPhotos_().filter(p => p.ai === AI.WAIT).length;
   return {
-    config: { school: CFG.SCHOOL, event: CFG.EVENT, level: CFG.LEVEL, aiReady: !!key_() },
+    config: { school: CFG.SCHOOL, event: CFG.EVENT, level: CFG.LEVEL, aiReady: !!key_(), aiLast: PropertiesService.getScriptProperties().getProperty('AI_LAST') || '' },
     items, photos, aiPending: pending, now: new Date().getTime(),
   };
 }
@@ -222,13 +223,16 @@ function review_(b) {
 
 function processAiQueue() {
   if (!key_()) return;
+  if (!PropertiesService.getScriptProperties().getProperty('MODELS_V2')) { PropertiesService.getScriptProperties().deleteProperty('GEMINI_MODELS_CACHE'); PropertiesService.getScriptProperties().setProperty('MODELS_V2', '1'); }
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) return;
   try {
     const sh = photosSheet_();
     const items = readItems_();
     const queue = readPhotos_().filter(p => p.ai === AI.WAIT).slice(0, CFG.AI_PER_RUN);
+    const started = Date.now();
     for (const p of queue) {
+      if (Date.now() - started > 240000) break;
       const item = items.find(i => i.id === p.itemId);
       const row = findPhotoRow_(sh, p.photoId);
       if (!item || !row) continue;
@@ -258,7 +262,7 @@ function checkPhoto_(p, item) {
   const img = DriveApp.getFileById(p.fileId).getBlob();
   const body = {
     contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/jpeg', data: Utilities.base64Encode(img.getBytes()) } }] }],
-    generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+    generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 400 },
   };
   let lastErr = '';
   for (const model of models_()) {
@@ -267,6 +271,8 @@ function checkPhoto_(p, item) {
       headers: { 'x-goog-api-key': key_() }, muteHttpExceptions: true,
     });
     const code = r.getResponseCode();
+    Logger.log(model + ' -> HTTP ' + code + ' ' + (code === 200 ? '' : r.getContentText().slice(0, 300)));
+    aiStatus_(model + ' HTTP ' + code + (code === 200 ? '' : ' ' + r.getContentText().slice(0, 160)));
     if (code === 429 || code === 503) { lastErr = 'quota'; continue; }     // ลองโมเดลถัดไป
     if (code === 404) { PropertiesService.getScriptProperties().deleteProperty('GEMINI_MODELS_CACHE'); lastErr = 'model'; continue; }
     if (code !== 200) { lastErr = 'HTTP ' + code + ' ' + r.getContentText().slice(0, 120); continue; }
@@ -304,9 +310,10 @@ function models_() {
       .map(m => m.name.replace('models/', ''))
       .filter(n => /flash/.test(n) && !/(image|tts|audio|live|embed|native|thinking|exp|preview-tts)/.test(n));
   } catch (e) { /* ใช้ค่าสำรอง */ }
-  const score = n => (/lite/.test(n) ? 1 : 0) + (/preview|exp/.test(n) ? 2 : 0) - (Number((n.match(/(\d+(\.\d+)?)/) || [0, 0])[1]) / 100);
-  list.sort((a, b) => score(a) - score(b));
-  const m = (list.length ? list : ['gemini-flash-latest', 'gemini-flash-lite-latest']).slice(0, 4);
+  // รุ่นเล็ก/เร็ว โควตาฟรีเยอะ เรียงก่อน (รุ่นใหม่ล่าสุดบางรุ่นตอบช้ามากจนค้าง)
+  const PREF = ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  const m = PREF.filter(n => !list.length || list.indexOf(n) >= 0);
+  if (!m.length) m.push('gemini-flash-lite-latest');
   p.setProperty('GEMINI_MODELS_CACHE', JSON.stringify({ t: Date.now(), m }));
   return m;
 }
@@ -390,3 +397,53 @@ function header_(sh, n) {
 }
 function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 function ui_(m) { try { SpreadsheetApp.getUi().alert(m); } catch (e) { Logger.log(m); } }
+
+
+/* ============================ นำเข้ารายการแข่งขัน ============================ */
+/** ใส่ ID ของชีตรายการแข่งขันเดิมของโรงเรียน (ส่วนกลางของลิงก์ docs.google.com/spreadsheets/d/<ID>/edit) */
+const SOURCE_SHEET_ID = '';
+function seedItems_() {
+  if (!SOURCE_SHEET_ID) throw new Error('ใส่ SOURCE_SHEET_ID ก่อนรัน setup');
+  const v = SpreadsheetApp.openById(SOURCE_SHEET_ID).getSheets()[0].getDataRange().getDisplayValues();
+  const out = []; let cur = null;
+  v.forEach(r => {
+    const no = String(r[0]).trim();
+    if (/^\d+$/.test(no)) { cur = [Number(no), String(r[1]).trim(), String(r[2]).trim() || 'อื่น ๆ', String(r[7]).trim(), String(r[8]).trim(), [], []]; out.push(cur); }
+    else if (!cur) return;
+    else if (String(r[1]).trim()) cur[1] += ' ' + String(r[1]).trim();
+    if (String(r[5]).trim()) cur[5].push(String(r[5]).trim());
+    if (String(r[6]).trim()) cur[6].push(String(r[6]).trim());
+  });
+  return out.filter(x => !/^กรรมการ/.test(x[1]))
+    .map(x => [x[0], x[1].replace(/\s+/g, ' ').trim(), x[2], x[3], x[4], x[5].join('\n'), x[6].join('\n')]);
+}
+
+/** แก้วันแข่งที่ชีตแปลงเป็นวันที่ (ปี 1969) ให้กลับเป็นข้อความ เช่น "9 ธ.ค.69" */
+function fixDates() {
+  const sh = sheet_(CFG.SHEET_ITEMS);
+  const r = sh.getRange(2, 5, sh.getLastRow() - 1, 1);
+  const TH = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  const v = r.getValues().map(x => [x[0] instanceof Date ? x[0].getDate() + ' ' + TH[x[0].getMonth()] + String(x[0].getFullYear() % 100).padStart(2, '0') : x[0]]);
+  r.setNumberFormat('@'); r.setValues(v);
+}
+
+function aiStatus_(s) {
+  PropertiesService.getScriptProperties().setProperty('AI_LAST', Utilities.formatDate(new Date(), CFG.TZ, 'HH:mm') + ' ' + String(s).slice(0, 220));
+}
+
+/** ทดสอบ AI 1 ครั้ง ดูผลใน "บันทึกการดำเนินการ" */
+function testAi() {
+  PropertiesService.getScriptProperties().deleteProperty('GEMINI_MODELS_CACHE');
+  Logger.log('models: ' + models_().join(', '));
+  const p = readPhotos_().filter(x => x.ai === AI.WAIT)[0];
+  if (!p) { Logger.log('ไม่มีรูปรอตรวจ'); return; }
+  const item = readItems_().find(i => i.id === p.itemId);
+  Logger.log(JSON.stringify(checkPhoto_(p, item)));
+}
+
+/** แสดงรายชื่อโมเดล Gemini ทั้งหมดที่ key นี้ใช้ได้ */
+function listModels() {
+  const r = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=300', { headers: { 'x-goog-api-key': key_() }, muteHttpExceptions: true });
+  const ms = (JSON.parse(r.getContentText()).models || []).filter(m => (m.supportedGenerationMethods || []).indexOf('generateContent') >= 0);
+  Logger.log(ms.map(m => m.name.replace('models/', '') + (m.thinking ? ' [think]' : '')).join('\n'));
+}
