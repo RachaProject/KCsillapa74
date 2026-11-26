@@ -8,7 +8,8 @@
   let D = null;              // ข้อมูลจากหลังบ้าน
   let localQ = [];           // คิวรูปที่ยังส่งไม่เสร็จในเครื่องนี้
   let admin = ss.get('kc74pw') || '';
-  const state = { page: 'send', day: 'all', q: '', item: null, rDay: 'all', rSub: 'all', rMed: 'all', pDay: 'all' };
+  let busy = false;          // กำลังส่งรูปจากหน้ารายการ
+  const state = { page: 'results', day: 'all', q: '', item: null, rDay: 'all', rSub: 'all', rMed: 'all', pDay: 'all' };
 
   /* ================= โหลดข้อมูล ================= */
   async function load(silent) {
@@ -28,7 +29,7 @@
     b.innerHTML = `⏳ มีรูปรอส่งในเครื่องนี้ ${n} รูป ${err ? '— ' + esc(err.error) + ' (ระบบจะลองส่งใหม่เอง)' : '— กำลังส่ง…'} <button id="qretry">ส่งตอนนี้</button>`;
     $('#qretry').onclick = flush;
   }
-  async function flush() { await API.flush(async () => { await refreshQueue(); }); await refreshQueue(); load(true); }
+  async function flush() { await API.flush(refreshQueue); await refreshQueue(); if (!busy) load(true); }
 
   function setStatus(t, err) { const s = $('#status'); s.textContent = t; s.hidden = !t; s.className = err ? 'status err' : 'status'; s.onclick = err ? () => load() : null; }
 
@@ -135,7 +136,7 @@
           </div>`).join('') || (mine.length ? '' : '<p class="muted">ยังไม่มีรูป</p>')}
       </div>`;
     state.flash = null;
-    $('#back').onclick = () => { state.item = null; render(); };
+    $('#back').onclick = () => { if (busy && !confirm('กำลังบันทึกรูปอยู่ ต้องการออกหรือไม่?')) return; state.item = null; render(); };
     let file = null;
     $('#file').onchange = e => {
       file = e.target.files[0] || null; $('#send').disabled = !file;
@@ -143,18 +144,37 @@
     };
     $('#send').onclick = async () => {
       const btn = $('#send'); btn.disabled = true; const msg = $('#msg');
-      msg.className = 'msg'; msg.textContent = 'กำลังเตรียมรูป…';
+      const pick = document.querySelector('.pick'); if (pick) pick.style.pointerEvents = 'none';
+      const guard = e => { e.preventDefault(); e.returnValue = ''; };
+      window.addEventListener('beforeunload', guard);
+      busy = true;
+      const show = (cls, html) => { msg.className = cls; msg.innerHTML = html; };
       try {
+        show('msg busy', '<span class="spin"></span> กำลังเตรียมรูป… <b>อย่าเพิ่งปิดหน้านี้</b>');
         ls.set('kc74sender', $('#sender').value.trim());
-        await API.enqueue(file, it.id, $('#sender').value.trim());
+        const qid = await API.enqueue(file, it.id, $('#sender').value.trim());
         await refreshQueue();
-        msg.textContent = 'กำลังส่ง… (ถ้าเน็ตหลุด รูปจะถูกเก็บไว้ในเครื่องและส่งให้เองเมื่อเน็ตกลับมา)';
-        await API.flush(refreshQueue); await refreshQueue();
-        const left = localQ.filter(x => x.itemId === it.id && x.stage === 'web');
-        state.flash = left.length ? ['msg warn', 'ยังส่งไม่สำเร็จ รูปเก็บไว้ในเครื่องแล้ว ระบบจะลองส่งใหม่เอง (ไม่ต้องถ่ายใหม่)']
-          : ['msg ok', '✓ ส่งรูปสำเร็จ AI จะตรวจภายในไม่กี่นาที'];
-        await load(true);
-      } catch (e) { msg.className = 'msg err'; msg.textContent = e.message; btn.disabled = false; }
+        const tick = setInterval(async () => {
+          const e = (await API.queue()).find(x => x.id === qid);
+          if (!e) return;
+          if (e.error) show('msg busy', `<span class="spin"></span> ส่งไม่ผ่าน (${esc(e.error)}) กำลังลองใหม่… <b>อย่าเพิ่งปิดหน้านี้</b>`);
+          else if (e.stage === 'web') show('msg busy', '<span class="spin"></span> ขั้นที่ 1/2 กำลังส่งรูป… <b>อย่าเพิ่งปิดหน้านี้</b>');
+          else show('msg busy', '<span class="spin"></span> ขั้นที่ 2/2 กำลังบันทึกไฟล์ต้นฉบับ (ความละเอียดเต็ม)… <b>อย่าเพิ่งปิดหน้านี้</b>');
+        }, 700);
+        // ลองส่งจนครบทั้ง 2 ขั้น (สูงสุด 3 รอบ)
+        let left = true;
+        for (let k = 0; k < 3 && left; k++) {
+          await API.flush(refreshQueue);
+          left = (await API.queue()).some(x => x.id === qid);
+          if (left && k < 2) await new Promise(r => setTimeout(r, 3000));
+        }
+        clearInterval(tick); await refreshQueue();
+        state.flash = left
+          ? ['msg warn', 'ยังบันทึกไม่ครบ รูปเก็บไว้ในเครื่องนี้แล้ว ระบบจะส่งต่อเองเมื่อเน็ตดีขึ้น กรุณาเปิดหน้านี้ค้างไว้ หรือกลับมาเปิดใหม่ด้วยเบราว์เซอร์เดิม (ไม่ต้องถ่ายใหม่)']
+          : ['msg ok', '✓ บันทึกครบทั้ง 2 ขั้นแล้ว ปิดหน้านี้ได้เลย (AI จะตรวจรูปภายในไม่กี่นาที)'];
+      } catch (e) { state.flash = ['msg err', e.message]; }
+      finally { window.removeEventListener('beforeunload', guard); busy = false; }
+      await load(true);
     };
     bindAdminPhotoButtons();
   }
@@ -355,11 +375,12 @@
     };
     $('#pwGo').onclick = go; $('#pw').onkeydown = e => { if (e.key === 'Enter') go(); };
   };
-  document.querySelectorAll('nav button').forEach(b => b.onclick = () => { state.page = b.dataset.p; if (b.dataset.p === 'send') state.item = null; location.hash = b.dataset.p; render(); window.scrollTo(0, 0); });
+  document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+    if (busy && !confirm('กำลังบันทึกรูปอยู่ ถ้าออกตอนนี้รูปจะส่งต่อทีหลัง ต้องการออกหรือไม่?')) return; state.page = b.dataset.p; if (b.dataset.p === 'send') state.item = null; location.hash = b.dataset.p; render(); window.scrollTo(0, 0); });
   const h = location.hash.replace('#', ''); if (['send', 'results', 'progress'].includes(h)) state.page = h;
 
   window.addEventListener('online', flush);
   setInterval(() => { if (localQ.length) flush(); }, 30000);
-  setInterval(() => { if (!document.hidden && !state.item && !document.querySelector('.edit select:focus, input:focus')) load(true); }, 60000);
+  setInterval(() => { if (!document.hidden && !busy && !state.item && !document.querySelector('.edit select:focus, input:focus')) load(true); }, 60000);
   refreshQueue().then(() => { load(); if (localQ.length) flush(); });
 })();

@@ -67,3 +67,6 @@ h2{margin:6px 0 4px;font-size:22px}h3{margin:6px 0;font-size:17px}
 @media (min-width:860px){.list{grid-template-columns:1fr 1fr}main{padding:20px}}
 .rrow>.grow{flex:1 1 100%}
 .ghost{white-space:nowrap}
+.msg.busy{color:#1d4f9c;font-weight:700;background:#eef4fd;border-radius:10px;padding:10px 12px}
+.spin{display:inline-block;width:14px;height:14px;border:2.5px solid #9dbbe6;border-top-color:#1d4f9c;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:4px}
+@keyframes sp{to{transform:rotate(360deg)}}

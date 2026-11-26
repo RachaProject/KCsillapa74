@@ -77,10 +77,14 @@ const API = (() => {
     return id;
   }
 
-  let running = false;
-  async function flush(onChange) {
-    if (running) return; running = true;
-    try {
+  let current = null;
+  function flush(onChange) {
+    if (current) return current;
+    current = doFlush(onChange).finally(() => { current = null; });
+    return current;
+  }
+  async function doFlush(onChange) {
+    {
       for (const e of await qAll()) {
         try {
           if (e.stage === 'web') {
@@ -97,7 +101,7 @@ const API = (() => {
           e.tries = (e.tries || 0) + 1; await qPut(e); onChange && onChange();
         }
       }
-    } finally { running = false; }
+    }
   }
 
   return { get, post, enqueue, flush, queue: qAll };
