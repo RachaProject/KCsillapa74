@@ -89,23 +89,38 @@ const R = (() => {
     ctx.clearRect(0, 0, S, S);
     ctx.drawImage(bg, 0, 0, S, S);
     const u = v => v * k;
-    const MAXW = 520;
+    const MAXW = 540, CX = 354.3, BOTTOM = 650;
 
-    // ชื่อนักเรียน: 1-2 คนบรรทัดเดียว / 3 คนขึ้นไป 2 บรรทัด
+    // ---------- เตรียมข้อความทั้งหมดก่อน แล้วค่อยจัดวางจากบนลงล่าง ----------
     const st = it.students || [];
-    let nameLines, nameSize;
-    if (st.length <= 2) {
-      nameLines = [joinThai(st)];
-      nameSize = fitSize(ctx, nameLines, 'Pattaya', 25, 400, MAXW, 14);
-    } else {
-      const h = Math.ceil(st.length / 2);
-      nameLines = [st.slice(0, h).join(' '), st.slice(h).join(' ')];
-      nameSize = Math.min(25 * 0.72, fitSize(ctx, nameLines, 'Pattaya', 25 * 0.72, 400, MAXW, 12));
+    const nameLines = st.length <= 2 ? [joinThai(st)]
+      : [st.slice(0, Math.ceil(st.length / 2)).join(' '), st.slice(Math.ceil(st.length / 2)).join(' ')];
+    const aw = 'ได้รับรางวัล ' + awardText(it);
+    let itemLines = ['ในการแข่งขัน' + it.name];
+    if (width(ctx, itemLines[0], 'Sarabun', 19, 700) > MAXW) {
+      const m = it.name.match(/^(.*\S)\s+((?:ชั้น|ระดับ)\s*\S.*)$/);
+      if (m) itemLines = ['ในการแข่งขัน' + m[1], m[2]];
     }
-    const twoLineNames = nameLines.length > 1;
+    const teach = 'ครูผู้ฝึกซ้อม : ' + joinThai(it.teachers || []);
+    // ขนาดที่ต้องการ (หน่วยอ้างอิง 708.66) ระยะห่างก่อนบล็อก และระยะบรรทัด
+    const blocks = [
+      { lines: nameLines, fam: 'Pattaya', w: 400, size: nameLines.length > 1 ? 22 : 29, lh: 1.22, gap: 0, color: '#ff1563', name: 1 },
+      { lines: [aw], fam: 'Pattaya', w: 400, size: 26, lh: 1.3, gap: 2, color: '#262626' },
+      { lines: itemLines, fam: 'Sarabun', w: 700, size: itemLines.length > 1 ? 17.5 : 19, lh: 1.3, gap: 4, color: '#262626' },
+      { lines: [cfg.event], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 4, color: '#262626' },
+      { lines: [cfg.level], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 0, color: '#262626' },
+      { lines: [teach], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 5, color: '#262626' },
+    ];
+    blocks.forEach(bl => { bl.size = fitSize(ctx, bl.lines, bl.fam, bl.size, bl.w, MAXW, 9); });
+    const textH = k2 => blocks.reduce((h, bl) => h + bl.gap * k2 + bl.lines.length * bl.size * k2 * bl.lh, 0);
 
-    // รูป
-    const px = 117.3, py = 168, pw = 474, ph = twoLineNames ? 262 : 276, pr = 33;
+    // รูป: สูงสุด 276 ลดลงได้ถึง 236 เพื่อให้ตัวหนังสือมีที่ / เว้นจากกรอบรูปอย่างน้อย 16
+    const px = 117.3, py = 168, pw = 474, pr = 33, GAP = 16;
+    let ph = Math.min(276, BOTTOM - textH(1) - GAP - py);
+    let sh = 1;
+    if (ph < 236) { ph = 236; sh = (BOTTOM - py - ph - GAP) / textH(1); }
+
+    // ---------- รูป ----------
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = u(4); ctx.shadowOffsetX = ctx.shadowOffsetY = u(2.1);
     rrect(ctx, u(px), u(py), u(pw), u(ph), u(pr)); ctx.fillStyle = '#e7efe3'; ctx.fill();
@@ -121,7 +136,7 @@ const R = (() => {
     ctx.drawImage(fg, 0, 0, S, S);
 
     // ชื่อโรงเรียนบนป้ายเขียว
-    drawText(ctx, cfg.school, u(354.3), u(44), {
+    drawText(ctx, cfg.school, u(CX), u(44), {
       family: 'Pattaya', size: u(fitSize(ctx, [cfg.school], 'Pattaya', 30, 400, 360)),
       color: '#ffffff', stroke: '#005426', strokeW: u(5), shadow: 'rgba(0,0,0,.45)',
     });
@@ -129,42 +144,16 @@ const R = (() => {
     // ป้ายเหรียญ
     await drawBadge(ctx, it.result, u(10), u(12), u(158));
 
-    // ชื่อนักเรียน + รางวัล
-    const nameY = twoLineNames ? 456 + 4 : 466;
-    const nameLH = nameSize * 1.12;
-    nameLines.forEach((l, i) => drawText(ctx, l, u(354.3), u(nameY + (i - (nameLines.length - 1) / 2) * nameLH), {
-      family: 'Pattaya', size: u(nameSize), color: '#ff1563', stroke: '#ffffff', strokeW: u(nameSize * 0.2),
-    }));
-    const aw = 'ได้รับรางวัล ' + awardText(it);
-    const awSize = fitSize(ctx, [aw], 'Pattaya', 24, 400, MAXW, 14);
-    drawText(ctx, aw, u(354.3), u(503), { family: 'Pattaya', size: u(awSize), color: '#262626', stroke: '#ffffff', strokeW: u(awSize * 0.2) });
-
-    // รายละเอียด: รายการ / งาน / ระดับ / ครู  (วางต่อกันลงมา ไม่มีทางทับ)
-    let itemLines = ['ในการแข่งขัน' + it.name];
-    const oneLine = width(ctx, itemLines[0], 'Sarabun', 16 * 1.12, 700) <= MAXW;
-    if (!oneLine) {
-      const m = it.name.match(/^(.*\S)\s+((?:ชั้น|ระดับ)\s*\S.*)$/);
-      itemLines = m ? ['ในการแข่งขัน' + m[1], m[2]] : itemLines;
-    }
-    const G = oneLine ? 1.12 : 1;
-    const teach = 'ครูผู้ฝึกซ้อม : ' + joinThai(it.teachers || []);
-    const blocks = [
-      { lines: itemLines, size: 16 * G, gap: 0 },
-      { lines: [cfg.event], size: 14 * G, gap: 6 },
-      { lines: [cfg.level], size: 14 * G, gap: 2 },
-      { lines: [teach], size: 13.5 * G, gap: 5 },
-    ];
-    blocks.forEach(bl => { bl.size = fitSize(ctx, bl.lines, 'Sarabun', bl.size, 700, MAXW, 9); });
-    // ถ้ายาวเกินขอบคลื่นทอง ย่อทั้งชุด
-    const total = bl => bl.reduce((s, x) => s + x.gap + x.lines.length * x.size * 1.3, 0);
-    const avail = 652 - 520;
-    const sh = Math.min(1, avail / total(blocks));
-    let y = 520;
+    // ---------- ข้อความ: วางต่อกันลงมาจากใต้กรอบรูป ไม่มีทางทับกัน ----------
+    let y = py + ph + 3 + GAP;   // 3 = ครึ่งหนึ่งของเส้นกรอบ
     blocks.forEach(bl => {
       y += bl.gap * sh;
       bl.lines.forEach(l => {
-        const s = bl.size * sh, lh = s * 1.3;
-        drawText(ctx, l, u(354.3), u(y + lh / 2), { family: 'Sarabun', weight: 700, size: u(s), color: '#262626', stroke: '#ffffff', strokeW: u(Math.max(1.6, s * 0.17)) });
+        const sz = bl.size * sh, lh = sz * bl.lh;
+        drawText(ctx, l, u(CX), u(y + lh / 2), {
+          family: bl.fam, weight: bl.w, size: u(sz), color: bl.color, stroke: '#ffffff',
+          strokeW: u(bl.name ? sz * 0.2 : bl.fam === 'Pattaya' ? sz * 0.2 : Math.max(1.6, sz * 0.17)),
+        });
         y += lh;
       });
     });
