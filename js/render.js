@@ -89,7 +89,7 @@ const R = (() => {
     ctx.clearRect(0, 0, S, S);
     ctx.drawImage(bg, 0, 0, S, S);
     const u = v => v * k;
-    const MAXW = 540, CX = 354.3, BOTTOM = 650;
+    const MAXW = 540, CX = 354.3, BOTTOM = 640;
 
     // ---------- เตรียมข้อความทั้งหมดก่อน แล้วค่อยจัดวางจากบนลงล่าง ----------
     const st = it.students || [];
@@ -112,12 +112,12 @@ const R = (() => {
     }
     // ขนาดที่ต้องการ (หน่วยอ้างอิง 708.66) ระยะห่างก่อนบล็อก และระยะบรรทัด
     const blocks = [
-      { lines: nameLines, fam: 'Pattaya', w: 400, size: nameLines.length === 1 ? 29 : nameLines.length === 2 ? 22 : 19, lh: 1.22, gap: 0, color: '#ff1563', name: 1 },
+      { lines: nameLines, fam: 'Pattaya', w: 400, size: nameLines.length === 1 ? 29 : nameLines.length === 2 ? 22 : 19, lh: 1.38, gap: 0, color: '#ff1563', name: 1 },
       { lines: [aw], fam: 'Pattaya', w: 400, size: 26, lh: 1.3, gap: 2, color: '#262626' },
-      { lines: itemLines, fam: 'Sarabun', w: 700, size: itemLines.length > 1 ? 17.5 : 19, lh: 1.3, gap: 4, color: '#262626' },
-      { lines: [cfg.event], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 4, color: '#262626' },
-      { lines: [cfg.level], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 0, color: '#262626' },
-      { lines: teachLines, fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 5, color: '#262626' },
+      { lines: itemLines, fam: 'Sarabun', w: 700, size: itemLines.length > 1 ? 17.5 : 19, lh: 1.5, gap: 4, color: '#262626' },
+      { lines: [cfg.event], fam: 'Sarabun', w: 700, size: 16, lh: 1.5, gap: 4, color: '#262626' },
+      { lines: [cfg.level], fam: 'Sarabun', w: 700, size: 16, lh: 1.5, gap: 0, color: '#262626' },
+      { lines: teachLines, fam: 'Sarabun', w: 700, size: 16, lh: 1.5, gap: 5, color: '#262626' },
     ];
     blocks.forEach(bl => { bl.size = fitSize(ctx, bl.lines, bl.fam, bl.size, bl.w, MAXW, 9); });
     const textH = k2 => blocks.reduce((h, bl) => h + bl.gap * k2 + bl.lines.length * bl.size * k2 * bl.lh, 0);
@@ -126,7 +126,7 @@ const R = (() => {
     const px = 117.3, py = 168, pw = 474, pr = 33, GAP = 16;
     let ph = Math.min(276, BOTTOM - textH(1) - GAP - py);
     let sh = 1;
-    if (ph < 236) { ph = 236; sh = (BOTTOM - py - ph - GAP) / textH(1); }
+    if (ph < 220) { ph = 220; sh = (BOTTOM - py - ph - GAP) / textH(1); }
 
     // ---------- รูป ----------
     ctx.save();
