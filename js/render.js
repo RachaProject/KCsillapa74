@@ -69,7 +69,7 @@ const R = (() => {
   /** ป้ายเหรียญ: เหรียญเปล่า + ข้อความฟอนต์ Charm ขอบเข้ม */
   async function drawBadge(ctx, result, x, y, h) {
     const b = MEDAL[result]; if (!b) return;
-    const img = await loadImg('assets/badge_' + b + '_blank.png');
+    const img = await loadImg('assets/badge_' + b + '_blank.png?v=2');
     const w = h * img.width / img.height;
     ctx.drawImage(img, x, y, w, h);
     const cx = x + w / 2;
