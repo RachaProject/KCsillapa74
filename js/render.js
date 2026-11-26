@@ -32,6 +32,11 @@ const R = (() => {
   function drawText(ctx, text, x, y, o) {
     font(ctx, o.family, o.size, o.weight);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    if (o.box) {   // จัดกึ่งกลางแนวตั้งตามขอบตัวอักษรจริง (รวมสระบน-ล่าง)
+      ctx.textBaseline = 'alphabetic';
+      const m = ctx.measureText(text);
+      y = y + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
+    }
     if (o.shadow) { ctx.save(); ctx.shadowColor = o.shadow; ctx.shadowBlur = o.size * 0.12; ctx.shadowOffsetX = ctx.shadowOffsetY = o.size * 0.06; }
     if (o.stroke) { ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.lineWidth = o.strokeW; ctx.strokeStyle = o.stroke; ctx.strokeText(text, x, y); }
     if (o.shadow) ctx.restore();
@@ -85,7 +90,7 @@ const R = (() => {
     await fontsReady();
     const S = canvas.width, k = S / T;
     const ctx = canvas.getContext('2d');
-    const [bg, fg] = await Promise.all([loadImg('assets/congrats_bg.png'), loadImg('assets/congrats_fg.png')]);
+    const [bg, fg] = await Promise.all([loadImg('assets/congrats_bg.png'), loadImg('assets/congrats_fg.png?v=2')]);
     ctx.clearRect(0, 0, S, S);
     ctx.drawImage(bg, 0, 0, S, S);
     const u = v => v * k;
@@ -144,7 +149,7 @@ const R = (() => {
     ctx.drawImage(fg, 0, 0, S, S);
 
     // ชื่อโรงเรียนบนป้ายเขียว
-    drawText(ctx, cfg.school, u(CX), u(44), {
+    drawText(ctx, cfg.school, u(CX), u(50), { box: true,
       family: 'Pattaya', size: u(fitSize(ctx, [cfg.school], 'Pattaya', 30, 400, 360)),
       color: '#ffffff', stroke: '#005426', strokeW: u(5), shadow: 'rgba(0,0,0,.45)',
     });
