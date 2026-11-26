@@ -93,23 +93,31 @@ const R = (() => {
 
     // ---------- เตรียมข้อความทั้งหมดก่อน แล้วค่อยจัดวางจากบนลงล่าง ----------
     const st = it.students || [];
-    const nameLines = st.length <= 2 ? [joinThai(st)]
-      : [st.slice(0, Math.ceil(st.length / 2)).join(' '), st.slice(Math.ceil(st.length / 2)).join(' ')];
+    // 1-2 คน 1 บรรทัด / 3-6 คน 2 บรรทัด / 7-9 คน 3 บรรทัด / 10 คนขึ้นไป 4 บรรทัด
+    const nL = st.length <= 2 ? 1 : st.length <= 6 ? 2 : st.length <= 9 ? 3 : 4;
+    const per = Math.ceil(st.length / nL);
+    const nameLines = nL === 1 ? [joinThai(st)] : Array.from({ length: nL }, (_, i) => st.slice(i * per, (i + 1) * per).join(' ')).filter(Boolean);
     const aw = 'ได้รับรางวัล ' + awardText(it);
     let itemLines = ['ในการแข่งขัน' + it.name];
     if (width(ctx, itemLines[0], 'Sarabun', 19, 700) > MAXW) {
       const m = it.name.match(/^(.*\S)\s+((?:ชั้น|ระดับ)\s*\S.*)$/);
       if (m) itemLines = ['ในการแข่งขัน' + m[1], m[2]];
     }
-    const teach = 'ครูผู้ฝึกซ้อม : ' + joinThai(it.teachers || []);
+    const tc = it.teachers || [];
+    let teachLines = ['ครูผู้ฝึกซ้อม : ' + joinThai(tc)];
+    if (tc.length > 2 && width(ctx, teachLines[0], 'Sarabun', 16, 700) > MAXW * 1.15) {
+      const h = Math.ceil(tc.length / 2);
+      teachLines = ['ครูผู้ฝึกซ้อม : ' + tc.slice(0, h).join(' '), joinThai(tc.slice(h)).replace(/^และ/, '')];
+      teachLines[1] = tc.slice(h, -1).concat(['และ' + tc[tc.length - 1]]).join(' ');
+    }
     // ขนาดที่ต้องการ (หน่วยอ้างอิง 708.66) ระยะห่างก่อนบล็อก และระยะบรรทัด
     const blocks = [
-      { lines: nameLines, fam: 'Pattaya', w: 400, size: nameLines.length > 1 ? 22 : 29, lh: 1.22, gap: 0, color: '#ff1563', name: 1 },
+      { lines: nameLines, fam: 'Pattaya', w: 400, size: nameLines.length === 1 ? 29 : nameLines.length === 2 ? 22 : 19, lh: 1.22, gap: 0, color: '#ff1563', name: 1 },
       { lines: [aw], fam: 'Pattaya', w: 400, size: 26, lh: 1.3, gap: 2, color: '#262626' },
       { lines: itemLines, fam: 'Sarabun', w: 700, size: itemLines.length > 1 ? 17.5 : 19, lh: 1.3, gap: 4, color: '#262626' },
       { lines: [cfg.event], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 4, color: '#262626' },
       { lines: [cfg.level], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 0, color: '#262626' },
-      { lines: [teach], fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 5, color: '#262626' },
+      { lines: teachLines, fam: 'Sarabun', w: 700, size: 16, lh: 1.3, gap: 5, color: '#262626' },
     ];
     blocks.forEach(bl => { bl.size = fitSize(ctx, bl.lines, bl.fam, bl.size, bl.w, MAXW, 9); });
     const textH = k2 => blocks.reduce((h, bl) => h + bl.gap * k2 + bl.lines.length * bl.size * k2 * bl.lh, 0);

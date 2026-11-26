@@ -20,6 +20,8 @@ const CFG = {
   AI_PER_RUN: 6,           // ตรวจรูปสูงสุดกี่รูปต่อรอบ (รอบละ 5 นาที)
   AI_MAX_TRIES: 5,         // ลองตรวจไม่สำเร็จเกินนี้ -> "ตรวจไม่ได้" ให้แอดมินดูเอง
   MAX_UPLOAD_B64: 30 * 1024 * 1024,
+  // รูปผ่านเมื่อเห็นนักเรียน: ทีม 1-3 คน ต้องครบ / ทีม 4 คนขึ้นไป อย่างน้อย 70%
+  SMALL_TEAM: 3, MIN_RATIO: 0.7,
   // หน้าประกาศผลของเขต (สรุปเหรียญรางวัลของโรงเรียน)
   RESULTS_URL: 'https://mskyt.ssk.in.th/sm74/p_list.php?scid=153',
 };
@@ -397,12 +399,14 @@ function processAiQueue() {
   } finally { lock.releaseLock(); }
 }
 
+function need_(n) { return n <= CFG.SMALL_TEAM ? n : Math.ceil(n * CFG.MIN_RATIO); }
+
 function checkPhoto_(p, item) {
-  const expected = item.students.length;
+  const expected = item.students.length, need = need_(expected);
   const prompt =
     'นี่คือรูปหมู่หลังการแข่งขันงานศิลปหัตถกรรมนักเรียนของโรงเรียนในประเทศไทย\n' +
     'รายการ: ' + item.name + '\n' +
-    'จำนวนนักเรียนที่ต้องอยู่ในรูป: ' + expected + ' คน\n' +
+    'นักเรียนในทีมทั้งหมด: ' + expected + ' คน (อาจไม่ได้อยู่ในรูปครบทุกคน ให้นับตามที่เห็นจริง)\n' +
     'งานของคุณ: นับจำนวน "นักเรียน" ในรูป (เด็กหรือวัยรุ่น ส่วนใหญ่ใส่ชุดนักเรียน ชุดพละ หรือชุดการแสดง) แยกจาก "ผู้ใหญ่" (ครู ผู้ปกครอง กรรมการ มักใส่ชุดข้าราชการหรือชุดสุภาพ)\n' +
     'นับเฉพาะคนที่เห็นหน้าชัดพอจะนับได้ ไม่นับคนที่อยู่ไกลเป็นฉากหลัง\n' +
     'ตอบเป็น JSON เท่านั้น: {"students": จำนวนนักเรียน, "adults": จำนวนผู้ใหญ่, "clear": รูปชัดไม่เบลอไม่มืดเกินไป true/false, ' +
@@ -431,10 +435,10 @@ function checkPhoto_(p, item) {
       const problems = [];
       if (!j.group_photo) problems.push('ไม่ใช่รูปหมู่');
       if (!j.clear) problems.push('รูปไม่ชัด');
-      if (n < expected) problems.push('พบนักเรียน ' + n + ' จาก ' + expected + ' คน');
+      if (n < need) problems.push('พบนักเรียน ' + n + ' คน ต้องมีอย่างน้อย ' + need + ' จาก ' + expected + ' คน');
       return {
         status: problems.length ? AI.WARN : AI.PASS, count: n,
-        note: problems.length ? problems.join(' / ') + (j.note ? ' — ' + j.note : '') : ('นักเรียนครบ ' + n + ' คน' + (j.note ? ' — ' + j.note : '')),
+        note: problems.length ? problems.join(' / ') + (j.note ? ' — ' + j.note : '') : ((n >= expected ? 'นักเรียนครบ ' + n + ' คน' : 'พบนักเรียน ' + n + ' จาก ' + expected + ' คน (ผ่านเกณฑ์ ' + need + ' คน)') + (j.note ? ' — ' + j.note : '')),
       };
     } catch (err) { lastErr = 'อ่านผล AI ไม่ได้'; }
   }

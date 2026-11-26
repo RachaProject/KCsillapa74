@@ -35,6 +35,7 @@
 
   /* ================= ตัวช่วยข้อมูล ================= */
   const days = () => [...new Set(D.items.map(i => i.date))];
+  const needOf = n => n <= 3 ? n : Math.ceil(n * 0.7);   // ตรงกับ CFG.SMALL_TEAM / MIN_RATIO ในหลังบ้าน
   const photosOf = id => (D.photos[id] || []);
   function photoState(it) {
     const ps = photosOf(it.id).filter(p => p.admin !== 'ให้ส่งใหม่');
@@ -80,7 +81,7 @@
   function pageSend() {
     $('#main').innerHTML = `
       <h2>ส่งรูปรายงาน</h2>
-      <p class="muted">เลือกรายการแข่งขัน แล้วส่ง <b>รูปรวมนักเรียนให้ครบทุกคน</b> 1 รูป</p>
+      <p class="muted">เลือกรายการแข่งขัน แล้วส่ง <b>รูปหมู่นักเรียน</b> 1 รูป (ทีม 1–3 คน ต้องครบ / ทีมใหญ่ อย่างน้อย 70%)</p>
       ${dayChips('day')}
       <input id="q" class="search" type="search" placeholder="ค้นหา: ชื่อรายการ เลขที่ ชื่อนักเรียน หรือครู" value="${esc(state.q)}">
       <div class="list" id="itemList"></div>`;
@@ -117,7 +118,7 @@
       </div>
       <div class="card">
         <h3>ส่งรูปรวม</h3>
-        <p class="muted">ถ่ายให้เห็น<b>นักเรียนครบ ${it.students.length} คน</b> หน้าชัด ไม่ย้อนแสง (มีครูอยู่ในรูปได้)</p>
+        <p class="muted">ถ่ายให้เห็น${needOf(it.students.length) === it.students.length ? `<b>นักเรียนครบ ${it.students.length} คน</b>` : `<b>นักเรียนอย่างน้อย ${needOf(it.students.length)} จาก ${it.students.length} คน</b>`} หน้าชัด ไม่ย้อนแสง (มีครูอยู่ในรูปได้)</p>
         <label class="pick">📷 ถ่ายรูป / เลือกรูป<input type="file" id="file" accept="image/*"></label>
         <div id="prev"></div>
         <input id="sender" class="search" placeholder="ชื่อผู้ส่ง (ไม่บังคับ)" value="${esc(ls.get('kc74sender') || '')}">
