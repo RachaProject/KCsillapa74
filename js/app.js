@@ -49,7 +49,7 @@
     wait: ['ส่งแล้ว · รอ AI ตรวจ', 'blue'], warn: ['ส่งแล้ว · AI เตือน', 'amber'], pass: ['ส่งแล้ว ✓', 'green'],
   };
   const chip = st => `<span class="chip ${STATE[st][1]}">${STATE[st][0]}</span>`;
-  const medalChip = it => it.result ? `<span class="chip m-${esc(it.result)}">${esc(R.awardText(it))}</span>` : '<span class="chip gray">ยังไม่กรอกผล</span>';
+  const medalChip = it => it.result ? `<span class="chip m-${esc(it.result)}">${esc(R.resultLabel(it))}</span>` : '<span class="chip gray">ยังไม่กรอกผล</span>';
   function bestPhoto(it) {
     const ps = photosOf(it.id).filter(p => p.admin !== 'ให้ส่งใหม่');
     return ps.find(p => p.admin === 'ผ่าน') || ps.slice().reverse().find(p => p.ai === 'ผ่าน') || ps[ps.length - 1] || null;
@@ -122,7 +122,6 @@
         <div id="prev"></div>
         <input id="sender" class="search" placeholder="ชื่อผู้ส่ง (ไม่บังคับ)" value="${esc(ls.get('kc74sender') || '')}">
         <button class="primary" id="send" disabled>ส่งรูป</button>
-        <div id="msg" class="${state.flash ? state.flash[0] : 'msg'}">${state.flash ? esc(state.flash[1]) : ''}</div>
       </div>
       <div class="card">
         <h3>รูปที่ส่งแล้ว</h3>
@@ -135,49 +134,69 @@
               <button class="sm" data-rev="${esc(p.id)}" data-v="ให้ส่งใหม่">ให้ส่งใหม่</button></span>
           </div>`).join('') || (mine.length ? '' : '<p class="muted">ยังไม่มีรูป</p>')}
       </div>`;
-    state.flash = null;
-    $('#back').onclick = () => { if (busy && !confirm('กำลังบันทึกรูปอยู่ ต้องการออกหรือไม่?')) return; state.item = null; render(); };
+    $('#back').onclick = () => { if (busy) return; state.item = null; render(); };
     let file = null;
     $('#file').onchange = e => {
       file = e.target.files[0] || null; $('#send').disabled = !file;
       $('#prev').innerHTML = file ? `<img src="${URL.createObjectURL(file)}" alt="">` : '';
     };
     $('#send').onclick = async () => {
-      const btn = $('#send'); btn.disabled = true; const msg = $('#msg');
-      const pick = document.querySelector('.pick'); if (pick) pick.style.pointerEvents = 'none';
-      const guard = e => { e.preventDefault(); e.returnValue = ''; };
-      window.addEventListener('beforeunload', guard);
-      busy = true;
-      const show = (cls, html) => { msg.className = cls; msg.innerHTML = html; };
-      try {
-        show('msg busy', '<span class="spin"></span> กำลังเตรียมรูป… <b>อย่าเพิ่งปิดหน้านี้</b>');
-        ls.set('kc74sender', $('#sender').value.trim());
-        const qid = await API.enqueue(file, it.id, $('#sender').value.trim());
-        await refreshQueue();
-        const tick = setInterval(async () => {
-          const e = (await API.queue()).find(x => x.id === qid);
-          if (!e) return;
-          if (e.error) show('msg busy', `<span class="spin"></span> ส่งไม่ผ่าน (${esc(e.error)}) กำลังลองใหม่… <b>อย่าเพิ่งปิดหน้านี้</b>`);
-          else if (e.stage === 'web') show('msg busy', '<span class="spin"></span> ขั้นที่ 1/2 กำลังส่งรูป… <b>อย่าเพิ่งปิดหน้านี้</b>');
-          else show('msg busy', '<span class="spin"></span> ขั้นที่ 2/2 กำลังบันทึกไฟล์ต้นฉบับ (ความละเอียดเต็ม)… <b>อย่าเพิ่งปิดหน้านี้</b>');
-        }, 700);
-        // ลองส่งจนครบทั้ง 2 ขั้น (สูงสุด 3 รอบ)
-        let left = true;
-        for (let k = 0; k < 3 && left; k++) {
-          await API.flush(refreshQueue);
-          left = (await API.queue()).some(x => x.id === qid);
-          if (left && k < 2) await new Promise(r => setTimeout(r, 3000));
-        }
-        clearInterval(tick); await refreshQueue();
-        state.flash = left
-          ? ['msg warn', 'ยังบันทึกไม่ครบ รูปเก็บไว้ในเครื่องนี้แล้ว ระบบจะส่งต่อเองเมื่อเน็ตดีขึ้น กรุณาเปิดหน้านี้ค้างไว้ หรือกลับมาเปิดใหม่ด้วยเบราว์เซอร์เดิม (ไม่ต้องถ่ายใหม่)']
-          : ['msg ok', '✓ บันทึกครบทั้ง 2 ขั้นแล้ว ปิดหน้านี้ได้เลย (AI จะตรวจรูปภายในไม่กี่นาที)'];
-      } catch (e) { state.flash = ['msg err', e.message]; }
-      finally { window.removeEventListener('beforeunload', guard); busy = false; }
-      await load(true);
+      $('#send').disabled = true;
+      ls.set('kc74sender', $('#sender').value.trim());
+      startSend(() => API.enqueue(file, it.id, $('#sender').value.trim()));
     };
     bindAdminPhotoButtons();
   }
+  /* ---------- ป็อปอัพการส่งรูป (เต็มจอ) ---------- */
+  function pop(kind, html, buttons) {
+    let el = $('#sendPop');
+    if (!el) { el = document.createElement('div'); el.id = 'sendPop'; document.body.appendChild(el); }
+    el.className = 'pop ' + kind; el.hidden = false;
+    el.innerHTML = `<div class="popbox">${html}<div class="popbtns">${(buttons || []).map((b, k) => `<button class="${k ? '' : 'primary'}" data-pb="${k}">${b[0]}</button>`).join('')}</div></div>`;
+    (buttons || []).forEach((b, k) => el.querySelector(`[data-pb="${k}"]`).onclick = b[1]);
+  }
+  function closePop() { const el = $('#sendPop'); if (el) el.hidden = true; }
+  const steps = (n, note) => `<div class="spin big"></div>
+    <h2>กำลังบันทึกรูป</h2>
+    <ol class="steps"><li class="${n > 1 ? 'done' : 'now'}">ส่งรูป</li><li class="${n === 2 ? 'now' : ''}">บันทึกไฟล์ต้นฉบับ (ความละเอียดเต็ม)</li></ol>
+    ${note ? `<p class="popnote">${note}</p>` : ''}
+    <p class="dont">อย่าเพิ่งปิดหน้านี้</p>`;
+  async function startSend(makeQ) {
+    const guard = e => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', guard);
+    busy = true;
+    let qid = null, tick = null;
+    try {
+      pop('busy', `<div class="spin big"></div><h2>กำลังเตรียมรูป…</h2><p class="dont">อย่าเพิ่งปิดหน้านี้</p>`);
+      qid = await makeQ();
+      await refreshQueue();
+      tick = setInterval(async () => {
+        const e = (await API.queue()).find(x => x.id === qid);
+        if (!e) return;
+        pop('busy', steps(e.stage === 'web' ? 1 : 2, e.error ? 'ส่งไม่ผ่าน (' + esc(e.error) + ') กำลังลองใหม่…' : ''));
+      }, 700);
+      let left = true;
+      for (let k = 0; k < 3 && left; k++) {
+        await API.flush(refreshQueue);
+        left = (await API.queue()).some(x => x.id === qid);
+        if (left && k < 2) await new Promise(r => setTimeout(r, 3000));
+      }
+      clearInterval(tick); tick = null; await refreshQueue();
+      if (left) {
+        pop('warn', `<div class="popicon">!</div><h2>ยังบันทึกไม่ครบ</h2>
+          <p>รูปเก็บไว้ในเครื่องนี้แล้ว <b>ไม่ต้องถ่ายใหม่</b><br>ระบบจะส่งต่อเองเมื่อเน็ตดีขึ้น กรุณาเปิดหน้านี้ค้างไว้ หรือกลับมาเปิดใหม่ด้วยเบราว์เซอร์เดิม</p>`,
+          [['ลองส่งอีกครั้ง', () => startSend(async () => qid)], ['ปิด', () => { closePop(); load(true); }]]);
+      } else {
+        try { navigator.vibrate && navigator.vibrate([80, 60, 80]); } catch (e) { }
+        pop('ok', `<div class="popicon">✓</div><h2>บันทึกครบแล้ว</h2><p class="big">ปิดหน้านี้ได้เลย</p><p class="muted">AI จะตรวจรูปภายในไม่กี่นาที</p>`,
+          [['ตกลง', () => { closePop(); load(true); }]]);
+      }
+    } catch (e) {
+      if (tick) clearInterval(tick);
+      pop('err', `<div class="popicon">✕</div><h2>ส่งรูปไม่สำเร็จ</h2><p>${esc(e.message)}</p>`, [['ตกลง', () => { closePop(); load(true); }]]);
+    } finally { window.removeEventListener('beforeunload', guard); busy = false; }
+  }
+
   function aiLine(p) {
     const c = { 'รอตรวจ': 'blue', 'ผ่าน': 'green', 'เตือน': 'amber', 'ตรวจไม่ได้': 'gray' }[p.ai] || 'gray';
     const ad = p.admin ? ` <span class="chip ${p.admin === 'ผ่าน' ? 'green' : 'red'}">แอดมิน: ${esc(p.admin)}</span>` : '';
@@ -215,10 +234,20 @@
       </div>
       <div class="stats">
         ${stat('เข้าร่วม', s.total, 'รายการ')}${stat('🥇 ทอง', s.gold)}${stat('🥈 เงิน', s.silver)}${stat('🥉 ทองแดง', s.bronze)}
-        ${stat('🏆 ชนะเลิศ', s.first)}${stat('รองฯ อันดับ 1', s.second)}${stat('รองฯ อันดับ 2', s.third)}${stat('⭐ ตัวแทน', s.rep)}
+        ${stat('🏆 ชนะเลิศ', s.first)}
       </div>
       <p class="muted">กรอกผลแล้ว ${s.done} จาก ${s.total} รายการ</p>
-      <div class="card"><h3>เทียบกับปีที่แล้ว</h3><p class="muted">รอข้อมูลผลการแข่งขันปีการศึกษา 2568</p></div>
+      ${compareCard(s)}
+      <div class="card adminonly"><h3>ดึงผลจากเว็บเขต</h3>
+        <p class="muted">อ่านผลจากหน้าประกาศผลของเขต แล้วให้ตรวจก่อนบันทึก${syncInfo()}</p>
+        <button class="primary" id="impWeb">ดึงผลจากเว็บเขต</button>
+        <details><summary>ดึงไม่ได้? คัดลอกตารางจากหน้าเว็บมาวางเอง</summary>
+          <p class="muted">เปิดหน้าประกาศผลบนคอม ลากคลุมทั้งตาราง กด Ctrl+C แล้ววางในช่องนี้</p>
+          <textarea id="impText" rows="5" placeholder="วางตารางผลที่นี่"></textarea>
+          <button class="sm" id="impPaste">อ่านจากข้อความที่วาง</button>
+        </details>
+        <div id="impMsg" class="muted"></div>
+      </div>
       <div class="card"><h3>แยกตามกลุ่มสาระ</h3>
         <table class="t"><thead><tr><th>กลุ่มสาระ</th><th>รายการ</th><th>ทอง</th><th>เงิน</th><th>ทองแดง</th><th>ชนะเลิศ</th></tr></thead><tbody>
         ${bySub.map(x => `<tr><td>${esc(x.sub)}<div class="bar">${seg(x.gold, maxN, 'g')}${seg(x.silver, maxN, 's')}${seg(x.bronze, maxN, 'b')}${seg(x.n - x.gold - x.silver - x.bronze, maxN, 'n')}</div></td>
@@ -250,12 +279,11 @@
     return `<div class="rrow">
       <div class="grow"><span class="no">${esc(i.no)}</span> <b>${esc(i.name)}</b>
         <small>${esc(i.students.join(', '))}</small></div>
-      <div>${medalChip(i)}${i.rep ? ' <span class="chip green">⭐ ตัวแทน</span>' : ''}</div>
+      <div>${medalChip(i)}${i.score ? ` <small class="muted">${esc(i.score)} คะแนน</small>` : ''}</div>
       <div class="adminonly edit" data-id="${esc(i.id)}">
         <select class="e-res"><option value="">— ผล —</option>${['ทอง', 'เงิน', 'ทองแดง', 'เข้าร่วม'].map(x => `<option ${i.result === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
-        <select class="e-rank"><option value="">อันดับ</option>${['1', '2', '3'].map(x => `<option ${String(i.rank) === x ? 'selected' : ''}>${x}</option>`).join('')}</select>
+        <input class="e-rank" placeholder="อันดับ" value="${esc(i.rank)}" inputmode="numeric" title="1 = ชนะเลิศ">
         <input class="e-score" placeholder="คะแนน" value="${esc(i.score)}" inputmode="decimal">
-        <label><input type="checkbox" class="e-rep" ${i.rep ? 'checked' : ''}> ตัวแทน</label>
         <button class="sm e-save">บันทึก</button>
         ${canPoster ? `<button class="sm e-post">ภาพโพสต์</button><button class="sm e-vinyl">ไวนิล</button>` : ''}
       </div></div>`;
@@ -268,8 +296,9 @@
       box.querySelector('.e-save').onclick = async e => {
         const b = e.target; b.disabled = true; b.textContent = 'กำลังบันทึก…';
         try {
-          const body = { a: 'setResult', pw: admin, itemId: id, result: box.querySelector('.e-res').value, rank: box.querySelector('.e-rank').value, score: box.querySelector('.e-score').value.trim(), rep: box.querySelector('.e-rep').checked };
-          await API.post(body); Object.assign(it, { result: body.result, rank: body.rank, score: body.score, rep: body.rep });
+          const rank = box.querySelector('.e-rank').value.replace(/\D/g, '');
+          const body = { a: 'setResult', pw: admin, itemId: id, result: box.querySelector('.e-res').value, rank, score: box.querySelector('.e-score').value.trim() };
+          await API.post(body); Object.assign(it, { result: body.result, rank: body.rank, score: body.score });
           b.textContent = '✓ บันทึกแล้ว'; setTimeout(render, 600);
         } catch (err) { alertMsg(err.message); b.disabled = false; b.textContent = 'บันทึก'; }
       };
@@ -277,8 +306,57 @@
       if (p) p.onclick = () => dlPoster(it, 1080, p);
       if (v) v.onclick = () => dlPoster(it, 2400, v);
     });
+    $('#impWeb').onclick = () => importPreview('');
+    $('#impPaste').onclick = () => { const t = $('#impText').value.trim(); if (!t) return alertMsg('ยังไม่ได้วางตาราง'); importPreview(t); };
     $('#zipPost').onclick = () => zipAll(1080, 'ภาพโพสต์');
     $('#zipVinyl').onclick = () => zipAll(2400, 'ไวนิล');
+  }
+
+  function compareCard(s) {
+    const P = (window.KC_CONFIG || {}).PREV;
+    if (!P) return '';
+    const d = (now, prev) => { const x = now - prev; return `<small class="${x >= 0 ? 'up' : 'down'}">${x > 0 ? '▲ ' + x : x < 0 ? '▼ ' + (-x) : 'เท่าเดิม'}</small>`; };
+    return `<div class="card"><h3>เทียบกับปีที่แล้ว (${esc(P.label)})</h3>
+      <table class="t"><thead><tr><th></th><th>ปีที่แล้ว</th><th>ปีนี้</th><th>ต่าง</th></tr></thead><tbody>
+      <tr><td>🥇 เหรียญทอง</td><td>${P.gold}</td><td><b>${s.gold}</b></td><td>${d(s.gold, P.gold)}</td></tr>
+      <tr><td>🏆 ชนะเลิศ</td><td>${P.first}</td><td><b>${s.first}</b></td><td>${d(s.first, P.first)}</td></tr>
+      </tbody></table>${s.done < s.total ? `<p class="muted">ปีนี้กรอกผลแล้ว ${s.done} จาก ${s.total} รายการ</p>` : ''}</div>`;
+  }
+  function syncInfo() {
+    try { const x = JSON.parse(D.config.syncLast || '{}'); if (!x.t) return '';
+      return `<br>ดึงอัตโนมัติล่าสุด ${new Date(x.t).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })} · บนเว็บ ${x.web} รายการ · เติมใหม่ ${x.added}${x.unmatched ? ' · จับคู่ไม่ได้ ' + x.unmatched : ''}`;
+    } catch (e) { return ''; }
+  }
+  async function importPreview(text) {
+    const m = $('#impMsg'); m.className = 'muted'; m.innerHTML = '<span class="spin"></span> กำลังอ่านผล…';
+    let r;
+    try { r = await API.post({ a: 'importPreview', pw: admin, text }, 120000); }
+    catch (e) { m.className = 'msg err'; m.textContent = e.message + (text ? '' : ' — ลองคัดลอกตารางมาวางเองด้านล่าง'); return; }
+    m.textContent = '';
+    const same = x => x.cur.result === x.result && String(x.cur.score || '') === String(x.score || '') && (!x.rank || String(x.cur.rank) === x.rank);
+    const rows = r.matches.map((x, k) => `<tr class="${same(x) ? 'same' : x.cur.result ? 'chg' : ''}">
+        <td><input type="checkbox" data-k="${k}" ${same(x) ? '' : 'checked'}></td>
+        <td><b>${esc(x.no)}</b> ${esc(x.name)}${x.webName !== x.name ? `<br><small class="muted">เว็บ: ${esc(x.webName)}</small>` : ''}</td>
+        <td>${esc(R.resultLabel(x))}<br><small>${esc(x.score)}</small></td>
+        <td><small>${x.cur.result ? esc(R.resultLabel(x.cur)) + (x.cur.score ? ' ' + esc(x.cur.score) : '') : '—'}</small></td></tr>`).join('');
+    const found = new Set(r.matches.map(x => x.itemId));
+    const notOnWeb = D.items.filter(i => !found.has(i.id));
+    openModal(`<h3>ผลจากเว็บเขต ${r.total} รายการ</h3>
+      <p class="muted">ติ๊กรายการที่จะบันทึก · สีเหลือง = ทับผลเดิม · สีเทา = ตรงกับที่มีแล้ว</p>
+      <div class="tscroll"><table class="t imp"><thead><tr><th></th><th>รายการของเรา</th><th>ผลจากเว็บ</th><th>ผลเดิม</th></tr></thead><tbody>${rows || '<tr><td colspan="4">ไม่มี</td></tr>'}</tbody></table></div>
+      ${r.unmatched.length ? `<h4>จับคู่ไม่ได้ ${r.unmatched.length} รายการ (กรอกเอง)</h4><ul>${r.unmatched.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+      ${notOnWeb.length ? `<details><summary>ยังไม่พบในประกาศ ${notOnWeb.length} รายการ</summary><ul>${notOnWeb.map(i => `<li>${esc(i.no)} ${esc(i.name)}${i.result ? ' (' + esc(R.resultLabel(i)) + ')' : ''}</li>`).join('')}</ul></details>` : ''}
+      <button class="primary" id="impGo">บันทึกรายการที่เลือก</button><div id="impGoMsg" class="msg"></div>`);
+    $('#impGo').onclick = async () => {
+      const list = [...document.querySelectorAll('.imp [data-k]:checked')].map(c => r.matches[+c.dataset.k]).map(x => ({ itemId: x.itemId, result: x.result, rank: x.rank, score: x.score }));
+      if (!list.length) return ($('#impGoMsg').textContent = 'ยังไม่ได้เลือกรายการ');
+      $('#impGo').disabled = true; $('#impGoMsg').innerHTML = '<span class="spin"></span> กำลังบันทึก…';
+      try {
+        const res = await API.post({ a: 'importApply', pw: admin, list }, 120000);
+        $('#modal').hidden = true; await load(true);
+        $('#impMsg').className = 'msg ok'; $('#impMsg').textContent = '✓ บันทึกผลแล้ว ' + res.saved + ' รายการ';
+      } catch (e) { $('#impGo').disabled = false; $('#impGoMsg').className = 'msg err'; $('#impGoMsg').textContent = e.message; }
+    };
   }
 
   /* ---------- สร้างไฟล์ภาพ ---------- */
@@ -376,7 +454,7 @@
     $('#pwGo').onclick = go; $('#pw').onkeydown = e => { if (e.key === 'Enter') go(); };
   };
   document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-    if (busy && !confirm('กำลังบันทึกรูปอยู่ ถ้าออกตอนนี้รูปจะส่งต่อทีหลัง ต้องการออกหรือไม่?')) return; state.page = b.dataset.p; if (b.dataset.p === 'send') state.item = null; location.hash = b.dataset.p; render(); window.scrollTo(0, 0); });
+    if (busy) return; state.page = b.dataset.p; if (b.dataset.p === 'send') state.item = null; location.hash = b.dataset.p; render(); window.scrollTo(0, 0); });
   const h = location.hash.replace('#', ''); if (['send', 'results', 'progress'].includes(h)) state.page = h;
 
   window.addEventListener('online', flush);

@@ -20,6 +20,8 @@ const CFG = {
   AI_PER_RUN: 6,           // ตรวจรูปสูงสุดกี่รูปต่อรอบ (รอบละ 5 นาที)
   AI_MAX_TRIES: 5,         // ลองตรวจไม่สำเร็จเกินนี้ -> "ตรวจไม่ได้" ให้แอดมินดูเอง
   MAX_UPLOAD_B64: 30 * 1024 * 1024,
+  // หน้าประกาศผลของเขต (สรุปเหรียญรางวัลของโรงเรียน)
+  RESULTS_URL: 'https://mskyt.ssk.in.th/sm74/p_list.php?scid=153',
 };
 
 const ITEM_COLS = ['รหัส', 'ลำดับที่', 'รายการแข่งขัน', 'กลุ่มสาระ', 'วันแข่ง', 'สถานที่',
@@ -38,6 +40,10 @@ function onOpen() {
     .addSeparator()
     .addItem('ให้ AI ตรวจรูปที่ค้างตอนนี้', 'processAiQueue')
     .addItem('ดูโมเดล AI ที่ใช้ได้', 'showModels')
+    .addSeparator()
+    .addItem('ดึงผลจากเว็บเขตตอนนี้', 'syncResultsNow')
+    .addItem('เปิดดึงผลอัตโนมัติ (ทุก 30 นาที)', 'startAutoSync')
+    .addItem('ปิดดึงผลอัตโนมัติ', 'stopAutoSync')
     .addToUi();
 }
 
@@ -55,8 +61,7 @@ function setup() {
   header_(sh, ITEM_COLS.length);
   const n = Math.max(sh.getMaxRows() - 1, 1);
   sh.getRange(2, 9, n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(CFG.RESULTS, true).setAllowInvalid(false).build());
-  sh.getRange(2, 10, n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['1', '2', '3'], true).setAllowInvalid(true).build());
-  sh.getRange(2, 12, n, 1).insertCheckboxes();
+  sh.getRange(2, 10, n, 1).clearDataValidations();   // อันดับ: ใส่ตัวเลขได้ทุกค่า
 
   let ph = ss.getSheetByName(CFG.SHEET_PHOTOS);
   if (!ph) { ph = ss.insertSheet(CFG.SHEET_PHOTOS); ph.getRange(1, 1, 1, PHOTO_COLS.length).setValues([PHOTO_COLS]); }
@@ -113,6 +118,8 @@ function doPost(e) {
       case 'setResult': return json_(setResult_(b));
       case 'review': return json_(review_(b));
       case 'aiNow': processAiQueue(); return json_({ ok: true });
+      case 'importPreview': return json_(importPreview_(b));
+      case 'importApply': return json_(importApply_(b));
     }
     return json_({ error: 'unknown action' });
   } catch (err) { return json_({ error: String(err.message || err) }); }
@@ -123,7 +130,7 @@ function doPost(e) {
 function publicData_() {
   const items = readItems_().map(i => ({
     id: i.id, no: i.no, name: i.name, subject: i.subject, date: i.date, venue: i.venue,
-    students: i.students, teachers: i.teachers, result: i.result, rank: i.rank, score: i.score, rep: i.rep,
+    students: i.students, teachers: i.teachers, result: i.result, rank: i.rank, score: i.score,
   }));
   const photos = {};
   readPhotos_().forEach(p => {
@@ -134,7 +141,8 @@ function publicData_() {
   });
   const pending = readPhotos_().filter(p => p.ai === AI.WAIT).length;
   return {
-    config: { school: CFG.SCHOOL, event: CFG.EVENT, level: CFG.LEVEL, aiReady: !!key_(), aiLast: PropertiesService.getScriptProperties().getProperty('AI_LAST') || '' },
+    config: { school: CFG.SCHOOL, event: CFG.EVENT, level: CFG.LEVEL, aiReady: !!key_(), aiLast: PropertiesService.getScriptProperties().getProperty('AI_LAST') || '',
+      syncLast: PropertiesService.getScriptProperties().getProperty('SYNC_LAST') || '' },
     items, photos, aiPending: pending, now: new Date().getTime(),
   };
 }
@@ -202,8 +210,148 @@ function setResult_(b) {
   const i = ids.indexOf(b.itemId);
   if (i < 0) throw new Error('ไม่พบรายการ');
   if (b.result && CFG.RESULTS.indexOf(b.result) < 0) throw new Error('ผลไม่ถูกต้อง');
-  sh.getRange(i + 2, 9, 1, 4).setValues([[b.result || '', b.rank || '', b.score || '', !!b.rep]]);
+  const rank = String(b.rank || '').trim();
+  if (rank && !/^\d{1,3}$/.test(rank)) throw new Error('อันดับต้องเป็นตัวเลข');
+  sh.getRange(i + 2, 9, 1, 3).setValues([[b.result || '', rank, b.score || '']]);
   return { ok: true };
+}
+
+/* ============================ ดึงผลจากเว็บเขต ============================ */
+/*  หน้าประกาศผล: ตาราง เหรียญ | กิจกรรม | กลุ่มสาระ | ชื่อผู้เข้าแข่งขัน | ผู้ฝึกสอน | คะแนน | หมายเหตุ
+ *  รายการทีม = หลายแถว (แถวต่อมาช่องเหรียญ/กิจกรรมว่าง)  หมายเหตุ "ชนะเลิศ" = อันดับ 1
+ *  จับคู่กับรายการของเราด้วยชื่อนักเรียนเป็นหลัก + ความคล้ายของชื่อรายการ             */
+
+function fetchResultsHtml_() {
+  const r = UrlFetchApp.fetch(CFG.RESULTS_URL, { muteHttpExceptions: true, followRedirects: true });
+  if (r.getResponseCode() !== 200) throw new Error('เปิดเว็บเขตไม่ได้ (รหัส ' + r.getResponseCode() + ')');
+  return r.getContentText('UTF-8');
+}
+
+/** แปลง HTML หรือข้อความที่คัดลอกจากตาราง เป็นรายการผล */
+function parseResults_(src) {
+  let rows = [];
+  if (/<tr[\s>]/i.test(src)) {
+    const strip = s => s.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+    const html = src.replace(/<!--[\s\S]*?-->/g, '');
+    (html.match(/<tr[\s\S]*?<\/tr>/gi) || []).forEach(tr => {
+      const cells = (tr.match(/<td[\s\S]*?<\/td>/gi) || []).map(strip);
+      if (cells.length >= 6) rows.push(cells);
+    });
+  } else {
+    rows = String(src).split(/\r?\n/).map(l => l.split('\t').map(c => c.replace(/\s+/g, ' ').trim())).filter(c => c.length >= 6);
+  }
+  const out = [];
+  rows.forEach(c => {
+    if (c[1] === 'กิจกรรม (ช่วงชั้น)' || c[0] === 'เหรียญ') return;
+    const [medal, name, subject, student, , score, note] = c;
+    if (name) out.push({ medal: medal, name: name, subject: subject, students: [], score: score || '', first: false });
+    const cur = out[out.length - 1];
+    if (!cur) return;
+    if (student) cur.students.push(student);
+    if (!cur.score && score) cur.score = score;
+    if (/ชนะเลิศ/.test(note || '') && !/รอง/.test(note || '')) cur.first = true;
+  });
+  out.forEach(o => {
+    if (CFG.RESULTS.indexOf(o.medal) < 0) {
+      const s = parseFloat(o.score);
+      o.medal = isNaN(s) ? '' : s >= 80 ? 'ทอง' : s >= 70 ? 'เงิน' : s >= 60 ? 'ทองแดง' : 'เข้าร่วม';
+    }
+  });
+  return out.filter(o => o.medal);
+}
+
+const normPerson_ = s => String(s).replace(/^(เด็กชาย|เด็กหญิง|ด\.ช\.|ด\.ญ\.|นางสาว|น\.ส\.|นาย|นาง)/, '').replace(/\s+/g, '');
+const normItem_ = s => String(s).replace(/ชั้น|ระดับ/g, '').replace(/[\s().\-–_]/g, '').toLowerCase();
+function dice_(a, b) {
+  if (a === b) return 1;
+  const bg = s => { const m = {}; for (let i = 0; i < s.length - 1; i++) { const k = s.substr(i, 2); m[k] = (m[k] || 0) + 1; } return m; };
+  const A = bg(a), B = bg(b); let n = 0, t = 0;
+  Object.keys(A).forEach(k => { t += A[k]; if (B[k]) n += Math.min(A[k], B[k]); });
+  Object.keys(B).forEach(k => { t += B[k]; });
+  return t ? 2 * n / t : 0;
+}
+const level_ = s => { const m = String(s).match(/ม\.\s*(\d)\s*-\s*(\d)/); return m ? m[1] + m[2] : ''; };
+
+/** จับคู่ผลจากเว็บกับรายการของเรา */
+function matchResults_(res, items) {
+  const used = {}, matches = [], unmatched = [];
+  res.forEach(r => {
+    const rs = r.students.map(normPerson_), rn = normItem_(r.name), rl = level_(r.name);
+    let best = null, bestScore = 0;
+    items.forEach(it => {
+      if (used[it.id]) return;
+      const ov = it.students.map(normPerson_).filter(x => rs.indexOf(x) >= 0).length;
+      const d = dice_(rn, normItem_(it.name));
+      const sameLv = !rl || !level_(it.name) || rl === level_(it.name);
+      if (!sameLv) return;
+      const ok = ov > 0 || d >= 0.85;
+      const sc = ov * 2 + d;
+      if (ok && sc > bestScore) { best = it; bestScore = sc; }
+    });
+    if (best) {
+      used[best.id] = 1;
+      matches.push({ itemId: best.id, no: best.no, name: best.name, webName: r.name, result: r.medal, rank: r.first ? '1' : '', score: r.score,
+        cur: { result: best.result, rank: best.rank, score: best.score } });
+    } else unmatched.push(r.name + ' (' + r.medal + (r.score ? ' ' + r.score : '') + ')');
+  });
+  return { matches: matches, unmatched: unmatched };
+}
+
+function importPreview_(b) {
+  const src = b.text && String(b.text).trim() ? String(b.text) : fetchResultsHtml_();
+  const res = parseResults_(src);
+  if (!res.length) throw new Error(b.text ? 'อ่านตารางผลจากข้อความที่วางไม่ได้' : 'เว็บเขตยังไม่มีผลประกาศของโรงเรียน');
+  const m = matchResults_(res, readItems_());
+  m.total = res.length;
+  return m;
+}
+
+/** บันทึกผลที่แอดมินยืนยัน: [{itemId,result,rank,score}] */
+function importApply_(b) {
+  const sh = sheet_(CFG.SHEET_ITEMS);
+  const last = sh.getLastRow();
+  const vals = sh.getRange(2, 1, last - 1, 11).getValues();
+  const idx = {}; vals.forEach((r, i) => idx[String(r[0])] = i);
+  let n = 0;
+  (b.list || []).forEach(x => {
+    const i = idx[x.itemId];
+    if (i === undefined || CFG.RESULTS.indexOf(x.result) < 0) return;
+    vals[i][8] = x.result;
+    if (x.rank) vals[i][9] = String(x.rank);
+    if (x.score) vals[i][10] = String(x.score);
+    n++;
+  });
+  sh.getRange(2, 9, vals.length, 3).setValues(vals.map(r => [r[8], r[9], r[10]]));
+  return { ok: true, saved: n };
+}
+
+/** ดึงอัตโนมัติ: เติมเฉพาะรายการที่ยังไม่มีผล ไม่ทับที่แอดมินกรอกไว้ */
+function syncResults() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return;
+  try {
+    const res = parseResults_(fetchResultsHtml_());
+    const m = matchResults_(res, readItems_().filter(i => !i.result));
+    if (m.matches.length) importApply_({ list: m.matches });
+    PropertiesService.getScriptProperties().setProperty('SYNC_LAST', JSON.stringify({ t: new Date().toISOString(), web: res.length, added: m.matches.length, unmatched: m.unmatched.length }));
+    Logger.log('ผลบนเว็บ %s รายการ เติมใหม่ %s จับคู่ไม่ได้ %s', res.length, m.matches.length, m.unmatched.length);
+    if (m.unmatched.length) Logger.log('จับคู่ไม่ได้: ' + m.unmatched.join(' | '));
+  } finally { lock.releaseLock(); }
+}
+function syncResultsNow() {
+  try { syncResults(); } catch (e) { return ui_('ดึงผลไม่สำเร็จ: ' + e.message); }
+  const s = JSON.parse(PropertiesService.getScriptProperties().getProperty('SYNC_LAST') || '{}');
+  ui_('ผลบนเว็บเขต ' + (s.web || 0) + ' รายการ\nเติมผลใหม่ ' + (s.added || 0) + ' รายการ\nจับคู่ไม่ได้ ' + (s.unmatched || 0) + ' รายการ (ดูรายละเอียดในหน้าเว็บ ปุ่มดึงผล)');
+}
+function startAutoSync() {
+  stopAutoSync(true);
+  ScriptApp.newTrigger('syncResults').timeBased().everyMinutes(30).create();
+  try { syncResults(); } catch (e) { return ui_('เปิดดึงอัตโนมัติแล้ว แต่ดึงครั้งแรกไม่สำเร็จ: ' + e.message); }
+  ui_('เปิดดึงผลอัตโนมัติแล้ว (ทุก 30 นาที) เติมเฉพาะรายการที่ยังไม่มีผล');
+}
+function stopAutoSync(silent) {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'syncResults').forEach(t => ScriptApp.deleteTrigger(t));
+  if (silent !== true) ui_('ปิดดึงผลอัตโนมัติแล้ว');
 }
 
 function review_(b) {

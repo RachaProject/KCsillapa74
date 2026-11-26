@@ -15,6 +15,7 @@ const R = (() => {
     await Promise.all([
       document.fonts.load('40px Pattaya', 'ทดสอบ 0123456789 .,:-()'),
       document.fonts.load('700 40px Sarabun', 'ทดสอบ 0123456789 .,:-()'),
+      document.fonts.load('700 40px Charm', 'เหรียญทองเงินแดง'),
     ]);
   }
 
@@ -51,11 +52,33 @@ const R = (() => {
   const T = 708.66;
   const MEDAL = { 'ทอง': 'gold', 'เงิน': 'silver', 'ทองแดง': 'bronze' };
 
+  /** ข้อความรางวัลบนภาพแสดงความยินดี: แสดง "ชนะเลิศ" เฉพาะอันดับ 1 ไม่แสดงอันดับอื่น */
   function awardText(it) {
+    if (it.result === 'เข้าร่วม') return 'เกียรติบัตรเข้าร่วมการแข่งขัน';
+    if (!it.result) return '';
+    return (Number(it.rank) === 1 ? 'ชนะเลิศ ' : '') + 'ระดับเหรียญ' + it.result;
+  }
+  /** ข้อความผลบนหน้าเว็บ: แสดงอันดับจริง */
+  function resultLabel(it) {
+    if (!it.result) return '';
     const r = Number(it.rank);
-    const rank = r === 1 ? 'ชนะเลิศ' : r === 2 ? 'รองชนะเลิศอันดับ 1' : r === 3 ? 'รองชนะเลิศอันดับ 2' : '';
-    const medal = it.result === 'เข้าร่วม' ? 'เกียรติบัตรเข้าร่วมการแข่งขัน' : (it.result ? 'เหรียญ' + it.result : '');
-    return [rank, medal].filter(Boolean).join(' ');
+    const base = it.result === 'เข้าร่วม' ? 'เข้าร่วม' : 'เหรียญ' + it.result;
+    return base + (r === 1 ? ' · ชนะเลิศ' : r > 1 ? ' · อันดับ ' + r : '');
+  }
+
+  /** ป้ายเหรียญ: เหรียญเปล่า + ข้อความฟอนต์ Charm ขอบเข้ม */
+  async function drawBadge(ctx, result, x, y, h) {
+    const b = MEDAL[result]; if (!b) return;
+    const img = await loadImg('assets/badge_' + b + '_blank.png');
+    const w = h * img.width / img.height;
+    ctx.drawImage(img, x, y, w, h);
+    const cx = x + w / 2;
+    const ink = { gold: '#4a1a06', silver: '#1f2a33', bronze: '#3d1405' }[b];
+    const L = [['เหรียญ', y + h * 0.295, h * 0.155, w * 0.56], [result, y + h * 0.5, h * 0.18, w * 0.62]]
+      .map(([t, cy, size, maxW]) => [t, cy, Math.min(size, size * maxW / width(ctx, t, 'Charm', size, 700))]);
+    // วาดขอบทุกบรรทัดก่อน แล้วค่อยเติมสีขาว ขอบจะไม่ทับตัวอักษรบรรทัดอื่น
+    L.forEach(([t, cy, s]) => drawText(ctx, t, cx, cy, { family: 'Charm', weight: 700, size: s, color: ink, stroke: ink, strokeW: s * 0.3, shadow: 'rgba(0,0,0,.35)' }));
+    L.forEach(([t, cy, s]) => drawText(ctx, t, cx, cy, { family: 'Charm', weight: 700, size: s, color: '#ffffff' }));
   }
 
   async function congrats(canvas, it, photo, cfg) {
@@ -104,12 +127,7 @@ const R = (() => {
     });
 
     // ป้ายเหรียญ
-    const b = MEDAL[it.result];
-    if (b) {
-      const badge = await loadImg('assets/badge_' + b + '.png');
-      const bh = 158, bw = bh * badge.width / badge.height;
-      ctx.drawImage(badge, u(10), u(12), u(bw), u(bh));
-    }
+    await drawBadge(ctx, it.result, u(10), u(12), u(158));
 
     // ชื่อนักเรียน + รางวัล
     const nameY = twoLineNames ? 456 + 4 : 466;
@@ -187,17 +205,16 @@ const R = (() => {
   }
 
   function stats(items) {
-    const r = { total: items.length, gold: 0, silver: 0, bronze: 0, joined: 0, first: 0, second: 0, third: 0, rep: 0, done: 0 };
+    const r = { total: items.length, gold: 0, silver: 0, bronze: 0, joined: 0, first: 0, done: 0 };
     items.forEach(i => {
       if (i.result) r.done++;
       if (i.result === 'ทอง') r.gold++; else if (i.result === 'เงิน') r.silver++; else if (i.result === 'ทองแดง') r.bronze++; else if (i.result === 'เข้าร่วม') r.joined++;
-      const n = Number(i.rank); if (n === 1) r.first++; if (n === 2) r.second++; if (n === 3) r.third++;
-      if (i.rep) r.rep++;
+      if (i.result && Number(i.rank) === 1) r.first++;
     });
     return r;
   }
 
   function canvasBlob(canvas, type, q) { return new Promise(res => canvas.toBlob(res, type || 'image/png', q)); }
 
-  return { congrats, summary, stats, awardText, loadImg, fontsReady, canvasBlob };
+  return { congrats, summary, stats, awardText, resultLabel, loadImg, fontsReady, canvasBlob };
 })();
